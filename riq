@@ -50,27 +50,42 @@ def print_resolutions(text, count):
     if 'resolutions' in data and 'results' in data:
         if count == None:
             count = '?'
-        print(" - resolutions ("+ str(count) + ")")
+        print("**resolutions ("+ str(count) + ")**")
         i = 0
+        resolveType = None
         for r in data['results']:
+            if i == 0:
+                resolveType = r.get('resolveType')
+                header1 = "| Resolve                        | FirstSeen   - LastSeen  |"
+                header2 = "|--------------------------------|-------------------------|"
+                if resolveType == 'ip':
+                    header1 += " Country | ASN |"
+                    header2 += "---------|-----|"
+                print(header1)
+                print(header2)
             i += 1
             if i <= MAX_RESULTS:
                 if 'resolve' in r and 'firstSeen' in r and 'lastSeen' in r and r['resolve'] in data['resolutions']:
                     v = r['resolve']
-                    line = "   | {:25} | {} - {} |".format(v, r['firstSeen'], r['lastSeen'])
-                    #line = "   - " + v + " [" + r['firstSeen'][:10] + " - " +r['lastSeen'][:10] + "]"
-                    if 'country' in data['resolutions'][v]:
-                        line += "  {}  |".format(data['resolutions'][v]['country'])
-                    if 'asn' in data['resolutions'][v]:
-                        line += " `{}` |".format(data['resolutions'][v]['asn'])
+                    firstSeen = r.get('firstSeen')[:10]
+                    lastSeen = r.get('lastSeen')[:10]
+                    line = "| {:30} | {} - {} |".format("[["+v+"]]", firstSeen, lastSeen)
+                    if resolveType == 'ip':
+                        country = data['resolutions'][v].get('country', '  ')
+                        asn = data['resolutions'][v].get('asn', '')
+                        line += "   {}    | `{}` |".format(country, asn)
                     print(line)
             else:
-                print("     [...]")
+                print("*...(truncated)...*")
                 break;
 
 def riskiq_login(s):
     response = s.get("https://community.riskiq.com/login")
     response = s.post("https://community.riskiq.com/api/account/login",json=login_data)
+    if response.status_code == 200 and response.text == '{"success": true}':
+        return True
+    return False
+
 def riskiq_logout(s):
     response = s.post("https://community.riskiq.com/api/account/logout")
 
@@ -109,20 +124,23 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     s = requests.session()
-    riskiq_login(s)
+    if riskiq_login(s):
 
-    print(args.query)
-    whois = get_whois(s, args.query)
-    if whois:
-        print_whois(whois)
+        print("### {}".format(args.query))
+        whois = get_whois(s, args.query)
+        if whois:
+            print_whois(whois)
 
-    heatmap = get_heatmap(s, args.query)
-    if heatmap:
-        print_heatmap(heatmap)
+        heatmap = get_heatmap(s, args.query)
+        if heatmap:
+            print_heatmap(heatmap)
 
-    count = get_resolution_count(s, args.query)
+        count = get_resolution_count(s, args.query)
 
-    resolutions = get_resolutions(s, args.query)
-    print_resolutions(resolutions, count)
+        resolutions = get_resolutions(s, args.query)
+        print_resolutions(resolutions, count)
 
-    riskiq_logout(s)
+        riskiq_logout(s)
+
+    else:
+        print("Login failed. Check credentials in {}".format(CONFIG))
