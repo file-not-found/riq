@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+from argparse import ArgumentParser
+from getpass import getpass
+import requests
+import json
+import os.path
+from configparser import ConfigParser
+
+MAX_RESULTS = 10
+# if bigger 25 -> adjust page size in request below
+CONFIG =  os.path.dirname(os.path.realpath(__file__)) + '/config.ini'
+login_data = {}
+
+def init_config():
+    global login_data
+    config = ConfigParser()
+    config.read(CONFIG)
+    if not 'riskiq' in config:
+        config['riskiq'] = {}
+    if not 'username' in config['riskiq']:
+        username = input('please enter username(e-mail) for riskiq: ')
+        config['riskiq']['username'] = username
+        password = getpass('please enter password for riskiq (input hidden): ')
+        config['riskiq']['password'] = password
+        with open(CONFIG, 'w') as configfile:
+            config.write(configfile)
+    username = config['riskiq']['username']
+    password = config['riskiq']['password']
+    login_data = {
+        'username': username,
+        'password': password,
+        'twoFactorAnswer': None,
+    }
+
+def print_whois(text):
+    data = json.loads(text)
+    if 'registrar' in data:
+        print(" - registrar: " + data['registrar'])
+
+def print_heatmap(text):
+    data = json.loads(text)
+    if 'enrichment' in data:
+        if 'asn' in data['enrichment'] and data['enrichment']['asn'] != None:
+            print(" - asn: " + data['enrichment']['asn'])
+        if 'country' in data['enrichment'] and data['enrichment']['country'] != None:
+            print(" - country: " + data['enrichment']['country'])
+
+def print_resolutions(text, count):
+    data = json.loads(text)
+    if 'resolutions' in data and 'results' in data:
+        if count == None:
+            count = '?'
+        print(" - resolutions ("+ str(count) + ")")
+        i = 0
+        for r in data['results']:
+            i += 1
+            if i <= MAX_RESULTS:
+                if 'resolve' in r and 'firstSeen' in r and 'lastSeen' in r and r['resolve'] in data['resolutions']:
+                    v = r['resolve']
+                    line = "   | {:25} | {} - {} |".format(v, r['firstSeen'], r['lastSeen'])
+                    #line = "   - " + v + " [" + r['firstSeen'][:10] + " - " +r['lastSeen'][:10] + "]"
+                    if 'country' in data['resolutions'][v]:
+                        line += "  {}  |".format(data['resolutions'][v]['country'])
+                    if 'asn' in data['resolutions'][v]:
+                        line += " `{}` |".format(data['resolutions'][v]['asn'])
+                    print(line)
+            else:
+                print("     [...]")
+                break;
+
+def riskiq_login(s):
+    response = s.get("https://community.riskiq.com/login")
+    response = s.post("https://community.riskiq.com/api/account/login",json=login_data)
+def riskiq_logout(s):
+    response = s.post("https://community.riskiq.com/api/account/logout")
+
+def get_whois(s, query):
+    response = s.get("https://community.riskiq.com/api/whois?query=" + query + "&compact_record=true")
+    if response.status_code == 200:
+        return response.text
+    return None
+
+def get_heatmap(s, query):
+    response = s.get("https://community.riskiq.com/api/heatmap?query=" + query + "&start=&end=&page=1")
+    if response.status_code == 200:
+        return response.text
+    return None
+
+def get_resolution_count(s, query):
+    response = s.get("https://community.riskiq.com/api/resolutions/count?query=" + query)
+    if response.status_code == 200:
+        data = json.loads(response.text)
+        if 'totalCount' in data:
+            return data['totalCount']
+    return None
+
+def get_resolutions(s, query):
+    response = s.get("https://community.riskiq.com/api/resolutions?includeFacets=false&query=" + query + "&page=1&sort=lastSeen&pageSize=25&order=desc")
+    if response.status_code == 200:
+        return response.text
+    return None
+
+if __name__ == '__main__':
+    init_config()
+
+    parser = ArgumentParser()
+    parser.add_argument('query')
+
+    args = parser.parse_args()
+
+    s = requests.session()
+    riskiq_login(s)
+
+    print(args.query)
+    whois = get_whois(s, args.query)
+    if whois:
+        print_whois(whois)
+
+    heatmap = get_heatmap(s, args.query)
+    if heatmap:
+        print_heatmap(heatmap)
+
+    count = get_resolution_count(s, args.query)
+
+    resolutions = get_resolutions(s, args.query)
+    print_resolutions(resolutions, count)
+
+    riskiq_logout(s)
