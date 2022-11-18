@@ -6,8 +6,7 @@ import json
 import os.path
 from configparser import ConfigParser
 
-MAX_RESULTS = 10
-# if bigger 25 -> adjust page size in request below
+RETRY_COUNT = 5
 CONFIG =  os.path.dirname(os.path.realpath(__file__)) + '/config.ini'
 login_data = {}
 
@@ -44,6 +43,23 @@ def print_heatmap(text):
             print(" - asn: " + data['enrichment']['asn'])
         if 'country' in data['enrichment'] and data['enrichment']['country'] != None:
             print(" - country: " + data['enrichment']['country'])
+
+def print_reputation(text):
+    data = json.loads(text)
+    if 'score' in data and 'classification' in data:
+        print(" - reputation: {} (Score: {})".format(data['classification'], data['score']))
+
+def print_insights(text):
+    data = json.loads(text)
+    insights = ''
+    if 'results' in data:
+        r = data['results']
+        for rule in r:
+            if 'score' in rule and 'rule' in rule and rule['score'] > 0:
+                if 'name' in rule['rule']:
+                    insights += rule['rule']['name'] + ' '
+    if insights != '':
+        print(" - insights: {}".format(insights))
 
 def print_resolutions(text, count):
     data = json.loads(text)
@@ -89,39 +105,47 @@ def riskiq_login(s):
 def riskiq_logout(s):
     response = s.post("https://community.riskiq.com/api/account/logout")
 
-def get_whois(s, query):
-    response = s.get("https://community.riskiq.com/api/whois?query=" + query + "&compact_record=true")
+def api_request(s, url):
+    response = s.get(url)
+    count = 1
+    while count <= RETRY_COUNT and response.status_code != 200:
+        response = s.get(url)
+        count += 1
     if response.status_code == 200:
         return response.text
     return None
+
+def get_whois(s, query):
+    return api_request(s, "https://community.riskiq.com/api/whois?query=" + query + "&compact_record=true")
 
 def get_heatmap(s, query):
-    response = s.get("https://community.riskiq.com/api/heatmap?query=" + query + "&start=&end=&page=1")
-    if response.status_code == 200:
-        return response.text
-    return None
+    return api_request(s, "https://community.riskiq.com/api/heatmap?query=" + query + "&start=&end=&page=1")
+
+def get_reputation(s, query):
+    return api_request(s, "https://community.riskiq.com/api/reputation?query=" + query)
+
+def get_insights(s, query):
+    return api_request(s, "https://community.riskiq.com/api/analyst-insights?entity=" + query)
 
 def get_resolution_count(s, query):
-    response = s.get("https://community.riskiq.com/api/resolutions/count?query=" + query)
-    if response.status_code == 200:
-        data = json.loads(response.text)
-        if 'totalCount' in data:
-            return data['totalCount']
+    data = json.loads(api_request(s, "https://community.riskiq.com/api/resolutions/count?query=" + query))
+    if 'totalCount' in data:
+        return data['totalCount']
     return None
 
 def get_resolutions(s, query):
-    response = s.get("https://community.riskiq.com/api/resolutions?includeFacets=false&query=" + query + "&page=1&sort=lastSeen&pageSize=25&order=desc")
-    if response.status_code == 200:
-        return response.text
-    return None
+    return api_request(s, "https://community.riskiq.com/api/resolutions?includeFacets=false&query=" + query + "&page=1&sort=lastSeen&pageSize=" + str(MAX_RESULTS) + "&order=desc")
 
 if __name__ == '__main__':
     init_config()
 
     parser = ArgumentParser()
+    parser.add_argument('--max', '-m', type=int, default=20, help='maximum number of resolutions to print')
     parser.add_argument('query')
 
     args = parser.parse_args()
+
+    MAX_RESULTS = args.max
 
     s = requests.session()
     if riskiq_login(s):
@@ -134,6 +158,14 @@ if __name__ == '__main__':
         heatmap = get_heatmap(s, args.query)
         if heatmap:
             print_heatmap(heatmap)
+
+        reputation = get_reputation(s, args.query)
+        if reputation:
+            print_reputation(reputation)
+
+        insights = get_insights(s, args.query)
+        if insights:
+            print_insights(insights)
 
         count = get_resolution_count(s, args.query)
 
