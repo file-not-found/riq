@@ -170,7 +170,9 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument('--max', '-m', type=int, default=20, help='maximum number of resolutions to print')
-    parser.add_argument('--brief', '-b', default=False, action="store_true", help='print short output')
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument('--brief', '-b', default=False, action="store_true", help='print short output')
+    output_group.add_argument('--verbose', '-v', default=False, action="store_true", help='print verbose output')
     parser.add_argument('--end', '-e', default=None, type=valid_date, help='end date as YYYY-MM-DD')
     parser.add_argument('query')
 
@@ -205,13 +207,14 @@ if __name__ == '__main__':
             if country:
                 print(" - country: " + country)
 
-            reputation = get_reputation(s, args.query)
-            if reputation:
-                print_reputation(reputation)
+            if args.verbose:
+                reputation = get_reputation(s, args.query)
+                if reputation:
+                    print_reputation(reputation)
 
-            insights = get_insights(s, args.query)
-            if insights:
-                print_insights(insights)
+                insights = get_insights(s, args.query)
+                if insights:
+                    print_insights(insights)
 
             print_resolutions(resolutions, count)
 
