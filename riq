@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from argparse import ArgumentParser
 from getpass import getpass
+from datetime import datetime
 import requests
 import json
 import os.path
@@ -9,9 +10,11 @@ from configparser import ConfigParser
 RETRY_COUNT = 5
 CONFIG =  os.path.dirname(os.path.realpath(__file__)) + '/config.ini'
 login_data = {}
+proxies = None
 
 def init_config():
     global login_data
+    global proxies
     config = ConfigParser()
     config.read(CONFIG)
     if not 'riskiq' in config:
@@ -30,19 +33,11 @@ def init_config():
         'password': password,
         'twoFactorAnswer': None,
     }
-
-def print_whois(text):
-    data = json.loads(text)
-    if 'registrar' in data:
-        print(" - registrar: " + data['registrar'])
-
-def print_heatmap(text):
-    data = json.loads(text)
-    if 'enrichment' in data:
-        if 'asn' in data['enrichment'] and data['enrichment']['asn'] != None:
-            print(" - asn: " + data['enrichment']['asn'])
-        if 'country' in data['enrichment'] and data['enrichment']['country'] != None:
-            print(" - country: " + data['enrichment']['country'])
+    if 'proxy_http' in config['riskiq'] and 'proxy_https' in config['riskiq']:
+        proxies = {
+            "http": config['riskiq']['proxy_http'],
+            "https": config['riskiq']['proxy_https'],
+        }
 
 def print_reputation(text):
     data = json.loads(text)
@@ -66,7 +61,7 @@ def print_resolutions(text, count):
     if 'resolutions' in data and 'results' in data:
         if count == None:
             count = '?'
-        print("**resolutions ("+ str(count) + ")**")
+        print("#### resolutions ("+ str(count) + ")")
         i = 0
         resolveType = None
         for r in data['results']:
@@ -115,11 +110,25 @@ def api_request(s, url):
         return response.text
     return None
 
-def get_whois(s, query):
-    return api_request(s, "https://community.riskiq.com/api/whois?query=" + query + "&compact_record=true")
+def get_registrar(s, query):
+    text =  api_request(s, "https://community.riskiq.com/api/whois?query=" + query + "&compact_record=true")
+    if text:
+        data = json.loads(text)
+        if 'registrar' in data:
+            return data['registrar']
 
-def get_heatmap(s, query):
-    return api_request(s, "https://community.riskiq.com/api/heatmap?query=" + query + "&start=&end=&page=1")
+def get_asn(s, query):
+    text = api_request(s, "https://community.riskiq.com/api/heatmap?query=" + query + "&start=&end=&page=1")
+    asn = None
+    country = None
+    if text:
+        data = json.loads(text)
+        if 'enrichment' in data:
+            if 'asn' in data['enrichment'] and data['enrichment']['asn'] != None:
+                asn =  data['enrichment']['asn']
+            if 'country' in data['enrichment'] and data['enrichment']['country'] != None:
+                country = data['enrichment']['country']
+            return asn, country
 
 def get_reputation(s, query):
     return api_request(s, "https://community.riskiq.com/api/reputation?query=" + query)
@@ -133,14 +142,36 @@ def get_resolution_count(s, query):
         return data['totalCount']
     return None
 
-def get_resolutions(s, query):
-    return api_request(s, "https://community.riskiq.com/api/resolutions?includeFacets=false&query=" + query + "&page=1&sort=lastSeen&pageSize=" + str(MAX_RESULTS) + "&order=desc")
+def get_resolutions(s, query, end=None):
+    url = "https://community.riskiq.com/api/resolutions?includeFacets=false&query=" + query + "&page=1&sort=lastSeen&pageSize=" + str(MAX_RESULTS) + "&order=desc"
+    if end:
+        url += "&end=" + end
+    return api_request(s, url)
+
+def print_brief(query, whois, asn, country, resolutions):
+    line = query
+    if asn:
+        if country:
+            asn = f'{asn} ({country})'
+        line += f' | {asn}'
+    elif whois:
+        line += f' | {whois}'
+    print(line)
+
+def valid_date(s):
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        msg = "not a valid date: {0!r}".format(s)
+        raise argparse.ArgumentTypeError(msg)
 
 if __name__ == '__main__':
     init_config()
 
     parser = ArgumentParser()
     parser.add_argument('--max', '-m', type=int, default=20, help='maximum number of resolutions to print')
+    parser.add_argument('--brief', '-b', default=False, action="store_true", help='print short output')
+    parser.add_argument('--end', '-e', default=None, type=valid_date, help='end date as YYYY-MM-DD')
     parser.add_argument('query')
 
     args = parser.parse_args()
@@ -148,29 +179,41 @@ if __name__ == '__main__':
     MAX_RESULTS = args.max
 
     s = requests.session()
+
+    if proxies:
+        s.proxies = proxies
+
     if riskiq_login(s):
 
-        print("### {}".format(args.query))
-        whois = get_whois(s, args.query)
-        if whois:
-            print_whois(whois)
-
-        heatmap = get_heatmap(s, args.query)
-        if heatmap:
-            print_heatmap(heatmap)
-
-        reputation = get_reputation(s, args.query)
-        if reputation:
-            print_reputation(reputation)
-
-        insights = get_insights(s, args.query)
-        if insights:
-            print_insights(insights)
-
+        registrar = get_registrar(s, args.query)
+        asn, country = get_asn(s, args.query)
         count = get_resolution_count(s, args.query)
 
-        resolutions = get_resolutions(s, args.query)
-        print_resolutions(resolutions, count)
+        resolutions = get_resolutions(s, args.query, args.end)
+        if args.brief:
+            print_brief(args.query, registrar, asn, country, resolutions)
+        else:
+            if args.end:
+                d = args.end
+            else:
+                d = datetime.now().strftime("%Y-%m-%d")
+            print("### {} ({})".format(args.query, d))
+            if registrar:
+                print(" - registrar: " + registrar)
+            if asn:
+                print(" - asn: " + asn)
+            if country:
+                print(" - country: " + country)
+
+            reputation = get_reputation(s, args.query)
+            if reputation:
+                print_reputation(reputation)
+
+            insights = get_insights(s, args.query)
+            if insights:
+                print_insights(insights)
+
+            print_resolutions(resolutions, count)
 
         riskiq_logout(s)
 
